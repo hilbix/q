@@ -231,7 +231,7 @@ cmd_run()
   while	unlock
         waitfor something_todo
   do
-        do_run
+        do_run "$@"
         lastret=$?
   done
 
@@ -243,7 +243,7 @@ cmd_one()
 {
   check 1
   DEFAULT true
-  waitfor something_todo && do_run
+  waitfor something_todo && do_run "$@"
   exit
 }
 
