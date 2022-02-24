@@ -71,6 +71,9 @@ Jobs:
 
 - `Q .Q run` can be run more than once in parallel
   - The command gets the current `Q` in the environment
+- `Q .Q one` same as `Q .Q run` but only runs the command a single time
+  - returns the return code of the command run
+  - use `nowait` to inhibit waiting
 - Processing of jobs is done in random order
 - Already existing jobs cannot be pushed again
   - So you can only push data a single time
