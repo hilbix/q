@@ -273,7 +273,7 @@ do_run()
     # execute processing
     eval "PARAMS=(\"\$@\" $k)"
     VERBOSE run: "${PARAMS[@]}"
-    ( exec "${PARAMS[@]}" )
+    ( Q="$Q" exec -- "${PARAMS[@]}" )
     ret=$?
     VERBOSE result $ret: "${PARAMS[@]}"
 
