@@ -3,11 +3,13 @@
 #
 # Shell based queuing
 
+exec 3>&2
+
 : 1
 STDOUT()	{ local e=$?; printf '%q' "$1"; [ 1 -ge "$#" ] || printf ' %q' "${@:2}"; printf '\n'; return $e; }
-STDERR()	{ local e=$?; STDOUT "$@" >&2; return $e; }
+STDERR()	{ local e=$?; STDOUT "$@" >&3; return $e; }
 VERBOSE()	{ local e=$?; "${VERBOSE:-false}" && STDERR "$@"; return "$e"; }
-DEBUG()		{ local e=$?; $DEBUG && STDOUT DEBUG: "$@" >&2; return $e; }
+DEBUG()		{ local e=$?; $DEBUG && STDOUT DEBUG: "$@" >&3; return $e; }
 OOPS()		{ STDERR :Q23: OOPS: "$@"; exit 23; }
 INTERNAL()	{ OOPS INTERNAL ERROR: $(caller 1): "$@"; }
 
@@ -22,6 +24,7 @@ OK()	{ VERBOSE :Q0: "${@:-ok}"; exit 0; }
 KO()	{ VERBOSE :Q1: FAIL: "$@"; exit 1; }
 DONE()	{ VERBOSE :Q2: done: "$@"; exit 2; }
 EXISTS() { VERBOSE :Q3: exists: "$@"; exit 3; }
+RUNNING() { VERBOSE :Q4: running: "$@"; exit 4; }
 result() { ( "$@" ); RETVAL=$?; }
 
 : DBM database command args..
@@ -56,25 +59,24 @@ signal()
 : waitfor testcommand args..
 waitfor()
 {
-  local bg
+  local waitbg
 
-  while	! x "$@"
-  do
+  while	x "$@" && return
         read <"$Q/Qfifo" &
-        bg="$!"
-        if	x "$@"
-        then
-                # This again is a bit tricky here
-                # As there might be a race between testcommand and FiFo
-                # we first must open the FiFO and then do the test
-                # If we then detect, that the test succeeds
-                # we want to remove the read by doing a signal.
-#                signal		# needed?
-#                wait $bg	# needed?
-                return
-        fi
-        wait $bg
+        waitbg="$!"
+        ! x "$@"
+  do
+        VERBOSE waiting 'for' "$@"
+        wait $waitbg
   done
+  # This again is a bit tricky here
+  # As there might be a race between testcommand and FiFo
+  # we first must open the FiFO and then do the test
+  # If we then detect, that the test succeeds
+  # we want to remove the read by doing a signal.
+#  signal		# needed?
+#  wait $bg	# needed?
+  :
 }
 
 #U init:	initialize Q directory
@@ -91,6 +93,10 @@ cmd_init()
 
   [ -e "$Q" ] && OOPS "$Q": already exists
   x mkdir "$Q" || OOPS "$Q": cannot create directory
+  for a in "${DIRS[@]}"
+  do
+        o mkdir "$Q/Q$a"
+  done
   for a in "${FIFOS[@]}"
   do
         o mknod "$Q/Q$a" p
@@ -112,6 +118,10 @@ check()
   local n m
   [ -e "$Q" ] || STDERR perhaps missing: "$0" "$Q" init || OOPS "$Q": does not exist
   [ -d "$Q" ] || OOPS "$Q": not a directory
+  for a in "${DIRS[@]}"
+  do
+        [ -d "$Q/Q$a" ] || OOPS "$Q/Q$a": missing directory
+  done
   for a in "${FIFOS[@]}"
   do
         [ -p "$Q/Q$a" ] || OOPS "$Q/Q$a": missing FIFO
@@ -131,13 +141,13 @@ check()
         [ -s "$Q/Q$a.dbm" ] || OOPS "$Q": not a Q directory: missing "$a.dbm"
   done
 
-  [ $ARGS -ge "${1:-0}" ]  || OOPS missing arguments: need $[$1-$ARGS] more arguments
-  [ $ARGS -le "${2:-$#}" ] || OOPS too many arguments: not more than "$2" allowed
+  [ $ARGS -ge "${1:-0}" ]     || OOPS missing arguments: need $[$1-$ARGS] more arguments
+  [ $ARGS -le "${2:-$ARGS}" ] || OOPS too many arguments: not more than "$2" allowed
 }
 
 locked()
 {
-  check "$@"
+  [ 0 = $# ] || check "$@"
   exec 7<"$Q/Qwait"
   flock 7
 }
@@ -153,7 +163,7 @@ cmd_verbose()	{ VERBOSE=:; }
 #U quiet:	disable verbose mode
 cmd_quiet()	{ VERBOSE=false; }
 cmd_debug()	{ DEBUG=:; }
-DEFAULT()	{ case "$AUTO" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
+DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
 
 #U set k v:	set key to value
 : cmd_set
@@ -183,21 +193,84 @@ cmd_get()
   KO none found: "$@"
 }
 
-: cmd_add
-cmd_add()
+: cmd_push values..
+cmd_push()
 {
   locked 1
   printf -vd ' %q' "$@"
   v k DBM done get "$d" && DONE "$@"
-  v k DBM todo get  "$d" && EXISTS "$@"
-  o DBM todo insert "$d" "$d"
+  v k DBM todo get "$d" && EXISTS "$@"
+  v k DBM fail get "$d" && KO "$@"
+  v k DBM pids get "$d" && RUNNING "$@"
+  o DBM todo insert "$d" 0
+  signal
   OK added: "$@"
+}
+
+something_todo()
+{
+  v k DBM todo list 2>/dev/null
+}
+
+livepid()
+{
+  local lock= "$Q/Qpids/$1.lock"
+  : T.B.D.
+#  rm -f "$lock"
+}
+
+: cmd_run
+cmd_run()
+{
+  check 1
+  DEFAULT true
+  while	unlock
+        waitfor something_todo
+  do
+        locked
+        v v DBM todo get "$k" || continue
+        if	v p DBM pids get "$k"
+        then
+                livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
+                VERBOSE stale PID $p
+                o DBM pids delete "$k" "$p"	# stale old (interrupted) entry (normal case)
+        fi
+
+        LOCK="$Q/Qpids/$$.pid"
+        touch "$LOCK"
+        exec 8<"$LOCK"
+        flock -nx 8 || OOPS cannot lock "$LOCK"
+        {
+        o let v1=v+1
+        o DBM pids insert "$k" "$$ $v1"
+        o DBM todo delete "$k" "$v"
+        unlock
+
+        # We now keep the lock given in DBM pids
+        # execute processing
+        eval "PARAMS=(\"\$@\" $k)"
+        VERBOSE run: "${PARAMS[@]}"
+        ( exec "${PARAMS[@]}" )
+        ret=$?
+        VERBOSE result $ret: "${PARAMS[@]}"
+
+        case "$ret" in
+        (0)	o DBM done insert "$k" "$[v1]";;
+        (*)	o DBM fail insert "$k" "$ret $[v1]";;
+        esac
+        o DBM pids delete "$k" "$$ $v1"
+        } 8<&-
+        rm -f "$LOCK"
+        exec 8<&-
+
+  done
+  exit
 }
 
 : main
 main()
 {
-  local RETVAL= DBMS=(main todo done data) LOCKS=(lock wait) FIFOS=(fifo)
+  local RETVAL= DBMS=(main todo done fail data pids) LOCKS=(lock wait) FIFOS=(fifo) DIRS=(pids)
 
   v Q readlink -f "$1" || OOPS "$1": invalid or missing path
   shift
@@ -226,13 +299,13 @@ cmd_help()
   case "$0" in
   (*/*.sh)	STDERR perhaps do: ln -s --relative "$0" ~/bin/Q;;
   esac
-  cat <<EOF >&2
+  cat <<EOF >&3
 Usage:	$0 /path/to/Q cmd args..
 
 Examples:
 
  tty1	Q /some/Q init
- tty1	Q /some/Q add something
+ tty1	Q /some/Q push something
  tty2	Q /some/Q run echo hello world
 
 Future:
