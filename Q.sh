@@ -311,6 +311,27 @@ do_list()
   [ 0 -lt "$cnt" ]
 }
 
+: cmd_retry
+cmd_retry()
+{
+  locked 1
+  printf -vk ' %q' "$@"
+  if	v v DBM fail get "$k"
+  then
+        o DBM todo insert "$k" "${v#* }"
+        o DBM fail delete "$k" "$v"
+        signal
+        OK retrying: "$@"
+  fi
+  if	v v DBM 'done' get "$k"
+  then
+        o DBM  todo  insert "$k" "$v"
+        o DBM 'done' delete "$k" "$v"
+        signal
+        OK redoing: "$@"
+  fi
+}
+
 : main
 main()
 {
