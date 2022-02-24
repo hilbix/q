@@ -1,9 +1,24 @@
-> This is terribly incomplete.
+> This currently is terribly incomplete!
 >
 > Many commands noted below are missing today!
 > For implemented commands see:
 >
->	sed -n 's/^cmd_\([^(]*\)(.*$/\1/p' Q.sh | sort
+>     sed -n 's/^cmd_\([^(]*\)(.*$/\1/p' Q.sh | sort
+
+Currently following commands work:
+
+- `Q .Q init`
+- `Q .Q push params..`
+  - `Q .Q verbose push params..`
+- `Q .Q run script args..`
+  - `Q .Q debug run script args..`
+
+So basically everything important works.
+
+Not yet implemented:
+
+- Management commands (like `list`)
+- Resume/Retry/Restart of interrupted/failed commands
 
 
 # Shell Queuing
@@ -13,19 +28,24 @@
 
 ## Usage
 
+	git clone https://github.com/hilbix/dbm.git
+	cd dbm
+	make
+	sudo make install
+	cd ..
 	git clone https://github.com/hilbix/Q.git
 	ln -s --relative Q/Q.sh ~/bin/Q
 
 then
 
 	cd scratchdir
-	Q init .Q
-	Q run echo
+	Q .Q init
+	Q .Q run echo
 
 in another terminal:
 
-	Q push scratchdir/.Q 1
-	Q push scratchdir/.Q 2
+	Q scratchdir/.Q 1
+	Q scratchdir/.Q 2
 
 > **Many commands below are planned only!**
 
