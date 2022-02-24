@@ -62,6 +62,7 @@ waitfor()
   local waitbg
 
   while	x "$@" && return
+        $NOWAIT && VERBOSE :Q55: nothing todo && return 55
         read <"$Q/Qfifo" &
         waitbg="$!"
         ! x "$@"
@@ -163,6 +164,7 @@ cmd_verbose()	{ VERBOSE=:; }
 #U quiet:	disable verbose mode
 cmd_quiet()	{ VERBOSE=false; }
 cmd_debug()	{ DEBUG=:; }
+cmd_nowait()	{ NOWAIT=:; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
 
 #U set k v:	set key to value
@@ -224,47 +226,66 @@ cmd_run()
 {
   check 1
   DEFAULT true
+
+  lastret=55	# hack
   while	unlock
         waitfor something_todo
   do
-        locked
-        v v DBM todo get "$k" || continue
-        if	v p DBM pids get "$k"
-        then
-                livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
-                VERBOSE stale PID $p
-                o DBM pids delete "$k" "$p"	# stale old (interrupted) entry (normal case)
-        fi
-
-        LOCK="$Q/Qpids/$$.pid"
-        touch "$LOCK"
-        exec 8<"$LOCK"
-        flock -nx 8 || OOPS cannot lock "$LOCK"
-        {
-        o let v1=v+1
-        o DBM pids insert "$k" "$$ $v1"
-        o DBM todo delete "$k" "$v"
-        unlock
-
-        # We now keep the lock given in DBM pids
-        # execute processing
-        eval "PARAMS=(\"\$@\" $k)"
-        VERBOSE run: "${PARAMS[@]}"
-        ( exec "${PARAMS[@]}" )
-        ret=$?
-        VERBOSE result $ret: "${PARAMS[@]}"
-
-        case "$ret" in
-        (0)	o DBM done insert "$k" "$[v1]";;
-        (*)	o DBM fail insert "$k" "$ret $[v1]";;
-        esac
-        o DBM pids delete "$k" "$$ $v1"
-        } 8<&-
-        rm -f "$LOCK"
-        exec 8<&-
-
+        do_run
+        lastret=$?
   done
+
+  exit $lastret
+}
+
+: cmd_one
+cmd_one()
+{
+  check 1
+  DEFAULT true
+  waitfor something_todo && do_run
   exit
+}
+
+do_run()
+{
+  # assumes something_todo has filled $k
+  locked
+  v v DBM todo get "$k" || continue
+  if	v p DBM pids get "$k"
+  then
+          livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
+          VERBOSE stale PID $p
+          o DBM pids delete "$k" "$p"	# stale old (interrupted) entry (normal case)
+  fi
+
+  LOCK="$Q/Qpids/$$.pid"
+  touch "$LOCK"
+  exec 8<"$LOCK"
+  flock -nx 8 || OOPS cannot lock "$LOCK"
+  {
+    o let v1=v+1
+    o DBM pids insert "$k" "$$ $v1"
+    o DBM todo delete "$k" "$v"
+    unlock
+
+    # We now keep the lock given in DBM pids
+    # execute processing
+    eval "PARAMS=(\"\$@\" $k)"
+    VERBOSE run: "${PARAMS[@]}"
+    ( exec "${PARAMS[@]}" )
+    ret=$?
+    VERBOSE result $ret: "${PARAMS[@]}"
+
+    case "$ret" in
+    (0)	o DBM done insert "$k" "$[v1]";;
+    (*)	o DBM fail insert "$k" "$ret $[v1]";;
+    esac
+    o DBM pids delete "$k" "$$ $v1"
+  } 8<&-
+  rm -f "$LOCK"
+  exec 8<&-
+  return $ret
 }
 
 : main
@@ -326,5 +347,6 @@ EOF
 
 VERBOSE=	# default: unspec
 DEBUG=false
+NOWAIT=false
 main "$@"
 
