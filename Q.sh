@@ -288,6 +288,29 @@ do_run()
   return $ret
 }
 
+: cmd_list
+cmd_list()
+{
+  RETVAL=2	# empty everything
+  do_list done && result OK $cnt successful
+  do_list pids && result RUNNING $cnt running
+  do_list todo && result EXISTS $cnt queued
+  do_list fail && result KO $cnt failed
+}
+
+: do_list
+do_list()
+{
+  # dbm is lacking an list0 command to dump k+v, sorry
+  cnt=0
+  while	IFS=$'\t' read -ru6 k v
+  do
+        let ++cnt
+        printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
+  done 6< <(x DBM "$1" list 0 '' 2>/dev/null | o DBM "$1" bget0 $'\t')
+  [ 0 -lt "$cnt" ]
+}
+
 : main
 main()
 {
