@@ -307,7 +307,7 @@ do_list()
   do
         let ++cnt
         printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
-  done 6< <(x DBM "$1" list 0 '' 2>/dev/null | o DBM "$1" bget0 $'\t')
+  done 6< <({ x DBM "$1" list 0 '' 2>/dev/null && printf '\0'; } | o DBM "$1" bget0 $'\t')
   [ 0 -lt "$cnt" ]
 }
 
