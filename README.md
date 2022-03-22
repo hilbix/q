@@ -33,7 +33,7 @@ Not yet implemented:
 	make
 	sudo make install
 	cd ..
-	git clone https://github.com/hilbix/Q.git
+	git clone --branch=bash https://github.com/hilbix/Q.git
 	ln -s --relative Q/Q.sh ~/bin/Q
 
 then
