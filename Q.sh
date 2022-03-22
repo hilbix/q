@@ -251,7 +251,7 @@ do_run()
 {
   # assumes something_todo has filled $k
   locked
-  v v DBM todo get "$k" || continue
+  v v DBM todo get "$k" || return
   if	v p DBM pids get "$k"
   then
           livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
