@@ -195,6 +195,15 @@ cmd_get()
   KO none found: "$@"
 }
 
+: cmd_kick values..
+cmd_kick()
+{
+  locked 1
+  printf -vd ' %q' "$@"
+  o DBM todo delete "$d"
+  OK deleted: "$@"
+}
+
 : cmd_push values..
 cmd_push()
 {
