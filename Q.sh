@@ -1,4 +1,4 @@
-#!/bin/bash
+
 # vim: ft=bash :
 #
 # Shell based queuing
@@ -49,8 +49,11 @@ signal()
 {
   {
     flock -x 6			# we are the only one here doing this
-    ( read <"$Q/Qfifo" & )	# in a weird race, this might stay behind
+    ( exec 6<&- 0<&- 1<&- 2<&-; read <"$Q/Qfifo" & )	# in a weird race, this might stay behind
+    sleep .1			# allow the above shell to run
     : >"$Q/Qfifo"		# comes back thanks to the read above
+    flock -u 6
+    exec 6<&-
   } 6<"$Q/Qlock"
 }
 
@@ -80,7 +83,7 @@ waitfor()
   :
 }
 
-#U init:	initialize Q directory
+#U init:	initialize or update Q directory
 #U		more commands can follow
 : cmd_init
 cmd_init()
@@ -139,7 +142,11 @@ check()
   done
   for a in "${DBMS[@]}"
   do
-        [ -s "$Q/Q$a.dbm" ] || OOPS "$Q": not a Q directory: missing "$a.dbm"
+        [ -s "$Q/Q$a.dbm" ] && continue
+        [ main = "$a" ] && OOPS "$Q": not a Q directory: missing "$a.dbm"
+        [ 0 = $# ] || OOPS "$Q": missing "$a.dbm": try cmd init to upgrade
+        # Upgrade
+        o DBM "$a" create
   done
 
   [ $ARGS -ge "${1:-0}" ]     || OOPS missing arguments: need $[$1-$ARGS] more arguments
@@ -150,24 +157,31 @@ locked()
 {
   [ 0 = $# ] || check "$@"
   exec 7<"$Q/Qwait"
-  flock 7
+  flock -x 7
 }
 
 unlock()
 {
+  flock -u 7
   exec 7<&-
 }
 
 
-#U verbose:	enable verbose mode
+#U verbose:	enable verbose
+#U		more commands can follow
 cmd_verbose()	{ VERBOSE=:; }
-#U quiet:	disable verbose mode
+#U quiet:	disable verbose
+#U		more commands can follow
 cmd_quiet()	{ VERBOSE=false; }
+#U debug:	debug output
+#U		more commands can follow
 cmd_debug()	{ DEBUG=:; }
+#U debug:	nowait mode: do not wait for more work to arrive
+#U		more commands can follow
 cmd_nowait()	{ NOWAIT=:; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
 
-#U set k v:	set key to value
+#U set k v..:	set key to values
 : cmd_set
 cmd_set()
 {
@@ -180,7 +194,7 @@ cmd_set()
   KO conflict: "$@"
 }
 
-#U get key..:	get first set key
+#U get key..:	get values of first set key
 : cmd_get
 cmd_get()
 {
@@ -195,7 +209,8 @@ cmd_get()
   KO none found: "$@"
 }
 
-: cmd_kick values..
+#U kick val..: remove single entry (opposite of push)
+: cmd_kick entry
 cmd_kick()
 {
   locked 1
@@ -204,6 +219,8 @@ cmd_kick()
   OK deleted: "$@"
 }
 
+#U push val..:	add values as single entry
+#U		fails if entry already known
 : cmd_push values..
 cmd_push()
 {
@@ -213,6 +230,9 @@ cmd_push()
   v k DBM todo get "$d" && EXISTS "$@"
   v k DBM fail get "$d" && KO "$@"
   v k DBM pids get "$d" && RUNNING "$@"
+  v k DBM post get "$d" && WAIT "$@"
+  v k DBM hold get "$d" && HOLD "$@"
+  v k DBM oops get "$d" && OOPS "$@"
   o DBM todo insert "$d" 0
   signal
   OK added: "$@"
@@ -230,6 +250,13 @@ livepid()
 #  rm -f "$lock"
 }
 
+#U run cmd args..
+#U	- waits for work to arive
+#U	- runs: runs cmd args.. val..
+#U	Environment:
+#U	- Q: then Q name
+#U	- Qn: the run count
+#U	- Qd: entry associated data
 : cmd_run
 cmd_run()
 {
@@ -247,6 +274,8 @@ cmd_run()
   exit $lastret
 }
 
+#U one cmd args..
+#U	like run, but only runs one single entry
 : cmd_one
 cmd_one()
 {
@@ -281,10 +310,13 @@ do_run()
     # We now keep the lock given in DBM pids
     # execute processing
     eval "PARAMS=(\"\$@\" $k)"
-    VERBOSE run: "${PARAMS[@]}"
-    ( Q="$Q" exec -- "${PARAMS[@]}" )
+    VERBOSE runnning: "${PARAMS[@]}"
+    ( Q="$Q" Qn="$v1" exec -- "${PARAMS[@]}" )
     ret=$?
-    VERBOSE result $ret: "${PARAMS[@]}"
+    VERBOSE finish $ret: "${PARAMS[@]}"
+
+    v t DBM next get "$k" || t=''
+    [ ".$t" = ".$s" ]
 
     case "$ret" in
     (0)	o DBM done insert "$k" "$[v1]";;
@@ -293,6 +325,7 @@ do_run()
     o DBM pids delete "$k" "$$ $v1"
   } 8<&-
   rm -f "$LOCK"
+  flock -u 8
   exec 8<&-
   return $ret
 }
@@ -344,7 +377,7 @@ cmd_retry()
 : main
 main()
 {
-  local RETVAL= DBMS=(main todo done fail data pids) LOCKS=(lock wait) FIFOS=(fifo) DIRS=(pids)
+  local RETVAL= DBMS=(main todo done fail data pids next info file post hold oops) LOCKS=(lock wait) FIFOS=(fifo) DIRS=(pids)
 
   v Q readlink -f "$1" || OOPS "$1": invalid or missing path
   shift
@@ -370,29 +403,13 @@ main()
 cmd_help()
 {
   VERBOSE :Q42: help
+  STDERR Usage: $0 /path/to/Q cmd args..
+  printf '\n' >&3
+  sed -n 's/^#U/# /p' "$0" >&3
+  printf '\n' >&3
   case "$0" in
   (*/*.sh)	STDERR perhaps do: ln -s --relative "$0" ~/bin/Q;;
   esac
-  cat <<EOF >&3
-Usage:	$0 /path/to/Q cmd args..
-
-Examples:
-
- tty1	Q /some/Q init
- tty1	Q /some/Q push something
- tty2	Q /some/Q run echo hello world
-
-Future:
-
- tty1	Q /some/Q run cat
- tty2	producer | Q /some/Q pipe | consumer
-
- tty1	Q /some/Q run cat
- tty2	Q /some/Q in <file
-
- tty1	Q /some/Q run cat file
- tty2	Q /some/Q out
-EOF
   exit 42
 }
 
@@ -402,4 +419,42 @@ VERBOSE=	# default: unspec
 DEBUG=false
 NOWAIT=false
 main "$@"
+
+# Databases:
+#
+# Entry is in only one of following:
+# todo:		k=entry v=CNT		# CNT initially == 0
+# pids:		k=entry v=PID CNT	# CNT incremented from todo
+# done:		k=entry v=CNT		# done entries
+# fail:		k=entry v=RC CNT	# failed entries
+# post:		k=entry v=CNT		# postprocessing
+# hold:		k=entry v=RC CNT	# entries on hold
+#
+# Entry can be additionally in:
+# next:		k=entry v=post		# processing
+# data:		k=entry v=data		# associated data
+# info:		k=entry v=data		# associated info
+# file:		k=entry v=files..	# associated files
+# oops:		k=entry v=oops		# permanent fail marker
+#
+# todo =run=> pids =OK=> done
+# todo =run=> pids =KO=> fail
+#
+# done+next => post
+# fail+next => hold
+#
+# Other data:
+# data:		k=kKEY v=VAL		# set KEY VAL..
+# main:		placeholder for now (just an empty database)
+#
+# CNT is the number how often entry was processed
+# PID is the PID of the process which is processing the entry
+# RC is the RC from the running command
+# KEY is the KEY from set KEY VAL..
+# VAL is the list of VALs from set KEY VAL..
+#
+# Prefixes:
+#
+# ' ' (SPC)	prefix of "entry" and "VAL"
+# k		prefix of KEY from cmds "set"/"get"
 
