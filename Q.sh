@@ -25,6 +25,8 @@ KO()	{ VERBOSE :Q1: FAIL: "$@"; exit 1; }
 DONE()	{ VERBOSE :Q2: done: "$@"; exit 2; }
 EXISTS() { VERBOSE :Q3: exists: "$@"; exit 3; }
 RUNNING() { VERBOSE :Q4: running: "$@"; exit 4; }
+WAIT()	{ VERBOSE :Q5: waiting: "$@"; exit 5; }
+HOLD()	{ VERBOSE :Q6: on-hold: "$@"; exit 6; }
 result() { ( "$@" ); RETVAL=$?; }
 
 : DBM database command args..
@@ -153,17 +155,45 @@ check()
   [ $ARGS -le "${2:-$ARGS}" ] || OOPS too many arguments: not more than "$2" allowed
 }
 
+ISLOCKED=false
+: locked [checkargs]
 locked()
 {
   [ 0 = $# ] || check "$@"
   exec 7<"$Q/Qwait"
-  flock -x 7
+  o flock -x 7
+  ISLOCKED=true
 }
 
+# Allow others to operate
+# this keeps the current exit code unchanged
+: unlock
 unlock()
 {
-  flock -u 7
+  local e=$?
+  $ISLOCKED || INTERNAL unlock without locked
+  ISLOCKED=false
+  o flock -u 7
   exec 7<&-
+  return $e
+}
+
+# must be run after 'locked'
+: livepid PID
+livepid()
+{
+  local LOCK="$Q/Qpids/$1.lock"
+
+  $ISLOCKED || INTERNAL livepid without locked
+  kill -0 "$1" 2>/dev/null && VERBOSE running PID: "$1" && return		# this check can create false positives
+  [ -f "$LOCK" ] || VERBOSE missing PID lock: "$1" || return	# this can happen if PID is reused
+  {
+        flock -nx 8 || VERBOSE locked PID: "$1" || return 0	# still running
+        # stale lock
+        VERBOSE stale PID lock: "$1"
+        o rm -f "$LOCK"
+  } 8<"$LOCK"
+  return 1	# PID not live
 }
 
 
@@ -176,7 +206,8 @@ cmd_quiet()	{ VERBOSE=false; }
 #U debug:	debug output
 #U		more commands can follow
 cmd_debug()	{ DEBUG=:; }
-#U debug:	nowait mode: do not wait for more work to arrive
+#U nowait:	do not wait for work to arrive (nowait mode)
+#U		affected cmds: run one
 #U		more commands can follow
 cmd_nowait()	{ NOWAIT=:; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
@@ -209,7 +240,7 @@ cmd_get()
   KO none found: "$@"
 }
 
-#U kick val..: remove single entry (opposite of push)
+#U kick val..:	remove single entry (opposite of push)
 : cmd_kick entry
 cmd_kick()
 {
@@ -238,23 +269,30 @@ cmd_push()
   OK added: "$@"
 }
 
+: something_todo
 something_todo()
 {
   v k DBM todo list 2>/dev/null
 }
 
-livepid()
+# output lines of database
+# while	IFS=$'\t' read -ru6 k v
+# do
+#	{
+#	..
+#	} 6<&-
+# done 6< <(feed DATABASE)
+: feed DB
+feed()
 {
-  local lock= "$Q/Qpids/$1.lock"
-  : T.B.D.
-#  rm -f "$lock"
+  { x DBM "$1" list 0 '' 2>/dev/null && printf '\0'; } | o DBM "$1" bget0 $'\t'
 }
 
 #U run cmd args..
 #U	- waits for work to arive
 #U	- runs: runs cmd args.. val..
 #U	Environment:
-#U	- Q: then Q name
+#U	- Q: the Q name
 #U	- Qn: the run count
 #U	- Qd: entry associated data
 : cmd_run
@@ -264,8 +302,7 @@ cmd_run()
   DEFAULT true
 
   lastret=55	# hack
-  while	unlock
-        waitfor something_todo
+  while	waitfor something_todo
   do
         do_run "$@"
         lastret=$?
@@ -289,7 +326,7 @@ do_run()
 {
   # assumes something_todo has filled $k
   locked
-  v v DBM todo get "$k" || return
+  v v DBM todo get "$k" || unlock || return
   if	v p DBM pids get "$k"
   then
           livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
@@ -308,15 +345,22 @@ do_run()
     unlock
 
     # We now keep the lock given in DBM pids
-    # execute processing
+    # It is correct to run the child without lock
+    # as the lock must fall in case we (the parent)
+    # get killed.  If the child is not aborted,
+    # we have no way to process the result anyway,
+    # hence the full processing must be done again.
+    # see: cmd_stale
     eval "PARAMS=(\"\$@\" $k)"
-    VERBOSE runnning: "${PARAMS[@]}"
+    VERBOSE running: "${PARAMS[@]}"
     ( Q="$Q" Qn="$v1" exec -- "${PARAMS[@]}" )
     ret=$?
     VERBOSE finish $ret: "${PARAMS[@]}"
 
-    v t DBM next get "$k" || t=''
-    [ ".$t" = ".$s" ]
+    locked
+    #v t DBM next get "$k" || t=''
+    # XXX TODO XXX implement next processing
+    #[ ".$t" = ".$s" ]
 
     case "$ret" in
     (0)	o DBM done insert "$k" "$[v1]";;
@@ -330,14 +374,46 @@ do_run()
   return $ret
 }
 
+#U list [done pids todo fail post hold oops]
+#U	list the entries in the given state
+#U	default: done pids todo fail
 : cmd_list
 cmd_list()
 {
-  RETVAL=2	# empty everything
-  do_list done && result OK $cnt successful
-  do_list pids && result RUNNING $cnt running
-  do_list todo && result EXISTS $cnt queued
-  do_list fail && result KO $cnt failed
+  check
+  TODO=(pids todo fail)
+  DONE=(done "${TODO[@]}")
+  OTHER=(wait hold oops)
+  [ 0 -lt $# ] || set -- "${DONE[@]}"
+  RETVAL=2	# nothing listed
+  for a
+  do
+#U	returns Q2 if nothing listed, else:
+        case "$a" in
+#U	all	list all known states
+        (all)	cmd_list "${DONE[@]}" "${OTHER[@]}";;
+#U	undone	list 
+        (undone)	cmd_list "${TODO[@]}" "${OTHER[@]}";;
+#U	done	Q0 successful
+        (done)	do_list done && result OK	$cnt successful;;
+#U	pids	Q4 running
+        (pids)	do_list pids && result RUNNING	$cnt running;;
+#U	todo	Q3 queued
+        (todo)	do_list todo && result EXISTS	$cnt queued;;
+#U	fail	Q1 failed
+        (fail)	do_list fail && result KO	$cnt failed;;
+#U	wait	Q5 waiting
+        (wait)	do_list post && result WAIT	$cnt waiting;;
+#U	hold	Q6 on-hold
+        (hold)	do_list hold && result HOLD	$cnt on-hold;;
+#U	oops	Q23 oopsed
+        (oops)	do_list oops && result OOPS	$cnt oopsed;;
+#U	main	(has no return value)
+        (main)	do_list main;;
+        (*)	OOPS can only list: "${MAIN[@]}" "${OTHER[@]}";;
+        esac
+  done
+  exit $RETVAL
 }
 
 : do_list
@@ -349,31 +425,80 @@ do_list()
   do
         let ++cnt
         printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
-  done 6< <({ x DBM "$1" list 0 '' 2>/dev/null && printf '\0'; } | o DBM "$1" bget0 $'\t')
+  done 6< <(feed "$1")
   [ 0 -lt "$cnt" ]
 }
 
-: cmd_retry
+#U retry val..
+#U	retry given entry
+#U	see: list fail
+#U	see: list done
+#U	see: list pids
+: cmd_retry entry..
 cmd_retry()
 {
   locked 1
   printf -vk ' %q' "$@"
   if	v v DBM fail get "$k"
   then
-        o DBM todo insert "$k" "${v#* }"
+        r="${v#* }"
+        o DBM todo insert "$k" "$r"
         o DBM fail delete "$k" "$v"
         signal
-        OK retrying: "$@"
+        OK retry "$r:" "$@"
   fi
   if	v v DBM 'done' get "$k"
   then
         o DBM  todo  insert "$k" "$v"
         o DBM 'done' delete "$k" "$v"
         signal
-        OK redoing: "$@"
+        OK redo "$v:" "$@"
   fi
+  if	v v DBM pids get "$1"
+  then
+        rerun "$k" "$v" "$@"
+        # does not return
+  fi
+  KO not found: "$@"
 }
 
+# returns false if entry not found in DB pids
+: rerun k v
+rerun()
+{
+  local k="$1" v="$2" p="${2%% *}" r="${2#* }"
+  shift 2
+
+  livepid "$p" && RUNNING PID "$p:" "$@"
+  o DBM todo insert "$k" "$r"
+  o DBM pids delete "$k" "$v"
+  OK requeued "$r:" "$@"
+}
+
+#U stale
+#U	requeue stale (killed) processes
+#U	more commands can follow
+#U	see: list pids
+#U	return Q0: no stale entries
+#U	return Q2: some stale entries rerun
+: cmd_stale
+cmd_stale()
+{
+  locked
+
+  RETVAL=0
+  cnt=0
+  stale=0
+  while	IFS=$'\t' read -ru6 k v
+  do
+        let ++cnt
+        ( eval "rerun \"\$k\" \"\$v\" $k" ) && RETVAL=2 && let ++stale
+  done 6< <(feed pids)
+  signal
+  VERBOSE ":Q$RETVAL:" running=$cnt requeued=$stale
+}
+
+: cmd_retry
 : main
 main()
 {
@@ -391,10 +516,10 @@ main()
         SHIFT=0
         ARGS=$#
         "cmd_$CMD" "$@"
-        [ 0 = $SHIFT ] || shift "$SHIFT" || INTERNAL: $SHIFT
+        [ 0 = $SHIFT ] || shift "$SHIFT" || INTERNAL $SHIFT
   done
 
-  [ -n "$RETVAL" ] || OOPS missing command: try: "$0" help
+  [ -n "$RETVAL" ] || OOPS missing command: try: "$0" . help
   exit $RETVAL
 }
 
@@ -427,6 +552,7 @@ main "$@"
 # pids:		k=entry v=PID CNT	# CNT incremented from todo
 # done:		k=entry v=CNT		# done entries
 # fail:		k=entry v=RC CNT	# failed entries
+# Not yet implemented:
 # post:		k=entry v=CNT		# postprocessing
 # hold:		k=entry v=RC CNT	# entries on hold
 #
@@ -437,6 +563,7 @@ main "$@"
 # file:		k=entry v=files..	# associated files
 # oops:		k=entry v=oops		# permanent fail marker
 #
+# Processing queue:
 # todo =run=> pids =OK=> done
 # todo =run=> pids =KO=> fail
 #
@@ -444,7 +571,7 @@ main "$@"
 # fail+next => hold
 #
 # Other data:
-# data:		k=kKEY v=VAL		# set KEY VAL..
+# data:		k=KEY v=VAL		# set KEY VAL..
 # main:		placeholder for now (just an empty database)
 #
 # CNT is the number how often entry was processed
