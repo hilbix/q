@@ -212,6 +212,9 @@ cmd_quiet()	{ VERBOSE=false; }
 #U debug:	debug output
 #U		more commands can follow
 cmd_debug()	{ DEBUG=:; }
+#U wait:	wait for work to arrive (default)
+#U		affected cmds: run one
+cmd_wait()     { NOWAIT=false; }
 #U nowait:	do not wait for work to arrive (nowait mode)
 #U		affected cmds: run one
 #U		returns Q55 in case we do not wait
@@ -256,6 +259,37 @@ cmd_kick()
   o DBM todo delete "$d"
   OK deleted: "$@"
 }
+
+#U rm queue match val..:	remove entry from queue
+#U	match must match the entry in the db
+#U	match can contain shellglobs
+: cmd_rm entry
+cmd_rm()
+{
+  VALID=(done todo fail pids post hold oops)
+
+  locked 1
+
+  isvalid "$1" "${VALID[@]}" || VERBOSE :Q23: valid DBs: "${VALID[@]}" || OOPS not a valid DB: "$1"
+
+  printf -vk ' %q' "${@:3}"
+  v v DBM "$1" get "$k"	|| KO missing: "${@:3}"
+  cmpval "$2" "$v"	|| KO no match: "$v"
+  o DBM "$1" delete "$k" "$v"
+  OK removed: "$1" "$v" "${@:3}"
+}
+
+: isvalid value choices..
+isvalid()
+{
+  local a
+  for a in "${@:2}"
+  do
+        [ ".$a" = ".$1" ] && return
+  done
+  return 1
+}
+
 
 #U push val..:	add values as single entry
 #U		fails if entry already known
