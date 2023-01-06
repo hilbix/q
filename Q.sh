@@ -61,13 +61,15 @@ signal()
 
 # We only want to call testcommand until it succeeds
 # such that it is only run a single time
+# BE SURE TO NOT CALL THIS WHILE KEEPING A LOCK
 : waitfor testcommand args..
 waitfor()
 {
   local waitbg
 
   while	x "$@" && return
-        $NOWAIT && VERBOSE :Q55: nothing todo && return 55
+        $NOWAIT && VERBOSE :Q55: nothing todo && RETVAL=55 && return 55
+        # global Qfifo already created in check()
         read <"$Q/Qfifo" &
         waitbg="$!"
         ! x "$@"
@@ -78,10 +80,13 @@ waitfor()
   # This again is a bit tricky here
   # As there might be a race between testcommand and FiFo
   # we first must open the FiFO and then do the test
+  # (see above, read -t does not help here as execution is done after IO redirection)
   # If we then detect, that the test succeeds
   # we want to remove the read by doing a signal.
+  # (It works without, the read terminates on the next signal or cmd_stale)
 #  signal		# needed?
-#  wait $bg	# needed?
+  # (wait is not needed as modern bash cleans up zombies even without wait)
+#  wait $waitbg		# needed?
   :
 }
 
@@ -151,8 +156,9 @@ check()
         o DBM "$a" create
   done
 
-  [ $ARGS -ge "${1:-0}" ]     || OOPS missing arguments: need $[$1-$ARGS] more arguments
-  [ $ARGS -le "${2:-$ARGS}" ] || OOPS too many arguments: not more than "$2" allowed
+  SHIFT="${2:-$ARGS}"
+  [ $ARGS -ge "${1:-0}" ] || OOPS missing arguments: need $[$1-$ARGS] more arguments
+  [ $ARGS -le "$SHIFT"  ] || OOPS too many arguments: not more than "$2" allowed
 }
 
 ISLOCKED=false
@@ -208,6 +214,7 @@ cmd_quiet()	{ VERBOSE=false; }
 cmd_debug()	{ DEBUG=:; }
 #U nowait:	do not wait for work to arrive (nowait mode)
 #U		affected cmds: run one
+#U		returns Q55 in case we do not wait
 #U		more commands can follow
 cmd_nowait()	{ NOWAIT=:; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
@@ -301,11 +308,10 @@ cmd_run()
   check 1
   DEFAULT true
 
-  lastret=55	# hack
   while	waitfor something_todo
   do
         do_run "$@"
-        lastret=$?
+        RETVAL=$?
   done
 
   exit $lastret
@@ -367,6 +373,7 @@ do_run()
     (*)	o DBM fail insert "$k" "$ret $[v1]";;
     esac
     o DBM pids delete "$k" "$$ $v1"
+    unlock
   } 8<&-
   rm -f "$LOCK"
   flock -u 8
@@ -439,48 +446,57 @@ cmd_retry()
 {
   locked 1
   printf -vk ' %q' "$@"
-  if	v v DBM fail get "$k"
-  then
-        r="${v#* }"
-        o DBM todo insert "$k" "$r"
-        o DBM fail delete "$k" "$v"
-        signal
-        OK retry "$r:" "$@"
-  fi
-  if	v v DBM 'done' get "$k"
-  then
-        o DBM  todo  insert "$k" "$v"
-        o DBM 'done' delete "$k" "$v"
-        signal
-        OK redo "$v:" "$@"
-  fi
-  if	v v DBM pids get "$1"
-  then
-        rerun "$k" "$v" "$@"
-        # does not return
-  fi
+
+  v v DBM fail   get "$k" && retry "$k" "$v"
+  v v DBM 'done' get "$k" && redo  "$k" "$v"
+  v v DBM pids   get "$1" && rerun "$k" "$v"
+
   KO not found: "$@"
 }
 
-# returns false if entry not found in DB pids
+: retry k v
+retry()
+{
+  local k="$1" v="$2" r="${2#* }"
+  eval "set -- $k"
+
+  o DBM todo insert "$k" "$r"
+  o DBM fail delete "$k" "$v"
+  signal
+  OK retry "$r:" "$@"
+}
+
+: redo k v
+redo()
+{
+  local k="$1" v="$2"
+  eval "set -- $k"
+
+  o DBM  todo  insert "$k" "$v"
+  o DBM 'done' delete "$k" "$v"
+  signal
+  OK redo "$v:" "$@"
+}
+
 : rerun k v
 rerun()
 {
   local k="$1" v="$2" p="${2%% *}" r="${2#* }"
-  shift 2
+  eval "set -- $k"
 
   livepid "$p" && RUNNING PID "$p:" "$@"
   o DBM todo insert "$k" "$r"
   o DBM pids delete "$k" "$v"
-  OK requeued "$r:" "$@"
+  OK rerun "$r:" "$@"
 }
 
 #U stale
 #U	requeue stale (killed) processes
 #U	more commands can follow
-#U	see: list pids
 #U	return Q0: no stale entries
 #U	return Q2: some stale entries rerun
+#U	see: list pids
+#U	as a sideffect this signals
 : cmd_stale
 cmd_stale()
 {
@@ -492,13 +508,48 @@ cmd_stale()
   while	IFS=$'\t' read -ru6 k v
   do
         let ++cnt
-        ( eval "rerun \"\$k\" \"\$v\" $k" ) && RETVAL=2 && let ++stale
+        ( rerun "$k" "$v" ) && RETVAL=2 && let ++stale
   done 6< <(feed pids)
   signal
   VERBOSE ":Q$RETVAL:" running=$cnt requeued=$stale
 }
 
-: cmd_retry
+#U failed rc count
+#U	retry failed entries with the given value
+#U	You can give (quoted!) shell globs in rc and count
+#U	see: list fail
+#U	more commands can follow
+: cmd_failed
+cmd_failed()
+{
+  locked 2 2
+
+  RETVAL=0
+  cnt=0
+  redo=0
+  while	IFS=$'\t' read -ru6 k v
+  do
+        let ++cnt
+        r="${v##* }"
+        cmpval "$1" "${v%% *}" || continue
+        cmpval "$2" "${v##* }" || continue
+        ( retry "$k" "$v" )
+        RETVAL=2
+        let ++redo
+  done 6< <(feed fail)
+  [ 0 = $redo ] || signal
+  VERBOSE ":Q$RETVAL:" fail=$cnt retry=$redo
+}
+
+# compare value against arg
+# arg can contain shell globs
+: cmpval arg val
+cmpval()
+{
+  case "$2" in ($1) return 0;; esac
+  return 1
+}
+
 : main
 main()
 {
@@ -537,6 +588,7 @@ cmd_help()
   esac
   exit 42
 }
+
 
 [ 0 = "$#" ] && cmd_help
 
