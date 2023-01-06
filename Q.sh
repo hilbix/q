@@ -335,7 +335,7 @@ feed()
 #U	Environment:
 #U	- Q: the Q name
 #U	- Qn: the run count
-#U	- Qd: entry associated data
+#U	- Qd: entry associated data (not yet implemented)
 : cmd_run
 cmd_run()
 {
@@ -425,6 +425,8 @@ cmd_list()
   TODO=(pids todo fail)
   DONE=(done "${TODO[@]}")
   OTHER=(wait hold oops)
+  MISC=(main data)
+  ALL=("${DONE[@]}" "${OTHER[@]}" "${MISC[@]}")
   [ 0 -lt $# ] || set -- "${DONE[@]}"
   RETVAL=2	# nothing listed
   for a
@@ -432,7 +434,7 @@ cmd_list()
 #U	returns Q2 if nothing listed, else:
         case "$a" in
 #U	all	list all known states
-        (all)	cmd_list "${DONE[@]}" "${OTHER[@]}";;
+        (all)	cmd_list "${ALL[@]}";;
 #U	undone	list 
         (undone)	cmd_list "${TODO[@]}" "${OTHER[@]}";;
 #U	done	Q0 successful
@@ -451,7 +453,9 @@ cmd_list()
         (oops)	do_list oops && result OOPS	$cnt oopsed;;
 #U	main	(has no return value)
         (main)	do_list main;;
-        (*)	OOPS can only list: "${MAIN[@]}" "${OTHER[@]}";;
+#U	data	(has no return value)
+        (data)	do_list data;;
+        (*)	OOPS can only list: "${ALL[@]}";;
         esac
   done
   exit $RETVAL
