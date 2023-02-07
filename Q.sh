@@ -1,7 +1,8 @@
-
-# vim: ft=bash :
+#!/bin/bash
 #
 # Shell based queuing
+#
+# vim: ft=bash :
 
 exec 3>&2
 
@@ -159,6 +160,15 @@ check()
   SHIFT="${2:-$ARGS}"
   [ $ARGS -ge "${1:-0}" ] || OOPS missing arguments: need $[$1-$ARGS] more arguments
   [ $ARGS -le "$SHIFT"  ] || OOPS too many arguments: not more than "$2" allowed
+  COUNT=0
+}
+
+# counts up.  return false if LIMIT reached
+: count [N]
+count()
+{
+  let COUNT+="${1:-1}" || :
+  [ 0 = "$LIMIT" ] || [ "$COUNT" -lt "$LIMIT" ]
 }
 
 ISLOCKED=false
@@ -220,6 +230,12 @@ cmd_wait()     { NOWAIT=false; }
 #U		returns Q55 in case we do not wait
 #U		more commands can follow
 cmd_nowait()	{ NOWAIT=:; }
+#U one:		same as 'limit 1'
+cmd_one()	{ LIMIT=1; }
+#U all:		same as 'limit 0'
+cmd_all()	{ LIMIT=0; }
+#U limit N:	limit number of entries to process max
+cmd_limit()	{ check 1 1; numeric "$1"; LIMIT="$1"; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
 
 #U set k v..:	set key to values
@@ -246,6 +262,7 @@ cmd_get()
         v v DBM data get "$k" || continue
         echo "$v"
         OK found: "$a"
+        count || break
   done
   KO none found: "$@"
 }
@@ -281,6 +298,33 @@ cmd_rm()
   cmpval "$2" "$v"	|| KO no match: "$v"
   o DBM "$1" delete "$k" "$v"
   OK removed: "$1" "$v" "${@:3}"
+}
+
+: numeric value..
+numeric()
+{
+  local a
+  for a in "${@:2}"
+  do
+        case "$a" in
+        (*[^0-9]*)	OOPS not numeric: "$a";;
+        (0)		;;
+        ([1-9]*)	;;
+        (*)		OOPS numerics must not start with 0: "$a";;
+        esac
+  done
+}
+
+: not0
+not0()
+{
+  local a
+
+  for a
+  do
+        [ 0 = "$a" ] && OOPS cannot be 0: "$a"
+  done
+  numeric "$@"
 }
 
 : isvalid value choices..
@@ -350,21 +394,23 @@ cmd_run()
   do
         do_run "$@"
         RETVAL=$?
+        count || break
   done
 
-  exit $lastret
+  exit $RETVAL
 }
 
-#U one cmd args..
-#U	like run, but only runs one single entry
-: cmd_one
-cmd_one()
-{
-  check 1
-  DEFAULT true
-  waitfor something_todo && do_run "$@"
-  exit
-}
+# Retired.  Use one run or limit 1 run
+##U one cmd args..
+##U	like run, but only runs one single entry
+#: cmd_one
+#cmd_one()
+#{
+#  check 1
+#  DEFAULT true
+#  waitfor something_todo && do_run "$@"
+#  exit
+#}
 
 do_run()
 {
@@ -461,6 +507,7 @@ cmd_list()
         (data)	do_list data;;
         (*)	OOPS can only list: "${ALL[@]}";;
         esac
+        count 0 || break
   done
   exit $RETVAL
 }
@@ -474,6 +521,7 @@ do_list()
   do
         let ++cnt
         printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
+        count || break
   done 6< <(feed "$1")
   [ 0 -lt "$cnt" ]
 }
@@ -551,6 +599,7 @@ cmd_stale()
   do
         let ++cnt
         ( rerun "$k" "$v" ) && RETVAL=2 && let ++stale
+        count || break
   done 6< <(feed pids)
   signal
   VERBOSE ":Q$RETVAL:" running=$cnt requeued=$stale
@@ -578,6 +627,7 @@ cmd_failed()
         ( retry "$k" "$v" )
         RETVAL=2
         let ++redo
+        count || break
   done 6< <(feed fail)
   [ 0 = $redo ] || signal
   VERBOSE ":Q$RETVAL:" fail=$cnt retry=$redo
@@ -637,6 +687,7 @@ cmd_help()
 VERBOSE=	# default: unspec
 DEBUG=false
 NOWAIT=false
+LIMIT=0
 main "$@"
 
 # Databases:
