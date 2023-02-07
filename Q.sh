@@ -454,7 +454,11 @@ do_run()
 
     case "$ret" in
     (0)	o DBM done insert "$k" "$[v1]";;
-    (*)	o DBM fail insert "$k" "$ret $[v1]";;
+    # XXX TODO XXX not exactly sure what to do if it already exists
+    # This can happen if you interrupt this script at this point
+    # and then run "stale" afterwards
+    # (which reruns pids, this is moves pids to todo)
+    (*)	o DBM fail replace "$k" "$ret $[v1]";;
     esac
     o DBM pids delete "$k" "$$ $v1"
     unlock
