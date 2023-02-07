@@ -390,14 +390,15 @@ cmd_run()
   check 1
   DEFAULT true
 
+  RET=55
   while	waitfor something_todo
   do
         do_run "$@"
-        RETVAL=$?
+        RET=$?
         count || break
   done
 
-  exit $RETVAL
+  exit $RET
 }
 
 # Retired.  Use one run or limit 1 run
