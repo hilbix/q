@@ -390,15 +390,15 @@ cmd_run()
   check 1
   DEFAULT true
 
-  RET=55
+  RET=
   while	waitfor something_todo
   do
-        do_run "$@"
-        RET=$?
+        do_run "$@" || RET=$?		# remember last fail code
+        [ -n "$RET" ] || RET=0		# if there was a run, remember it's code
         count || break
   done
 
-  exit $RET
+  exit ${RET:-$RETVAL}			# if nothing done, return RETVAL
 }
 
 # Retired.  Use one run or limit 1 run
