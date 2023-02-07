@@ -263,6 +263,10 @@ cmd_kick()
 #U rm queue match val..:	remove entry from queue
 #U	match must match the entry in the db
 #U	match can contain shellglobs
+#U	Example (the 3 values are separated by TAB):
+#U	# Q .Q list fail
+#U	fail	127 1	test 123
+#U	# Q .Q verbose rm fail '127 1' test 123
 : cmd_rm entry
 cmd_rm()
 {
