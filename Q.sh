@@ -345,23 +345,23 @@ isvalid()
 cmd_push()
 {
   locked 1
-  printf -vd ' %q' "$@"
-  v k DBM done get "$d" && DONE "$@"
-  v k DBM todo get "$d" && EXISTS "$@"
-  v k DBM fail get "$d" && KO "$@"
-  v k DBM pids get "$d" && RUNNING "$@"
-  v k DBM post get "$d" && WAIT "$@"
-  v k DBM hold get "$d" && HOLD "$@"
-  v k DBM oops get "$d" && OOPS "$@"
-  o DBM todo insert "$d" 0
+  printf -vk ' %q' "$@"
+  v v DBM 'done' get "$k" && DONE "$@"
+  v v DBM  todo  get "$k" && EXISTS "$@"
+  v v DBM  fail  get "$k" && KO "$@"
+  v v DBM  pids  get "$k" && RUNNING "$@"
+  v v DBM  post  get "$k" && WAIT "$@"
+  v v DBM  hold  get "$k" && HOLD "$@"
+  v v DBM  oops  get "$k" && OOPS "$@"
+  o DBM todo insert "$k" 0
   signal
   OK added: "$@"
 }
 
-: something_todo
+: something_todo VAR
 something_todo()
 {
-  v k DBM todo list 2>/dev/null
+  v "$1" DBM todo list 2>/dev/null
 }
 
 # output lines of database
@@ -391,7 +391,7 @@ cmd_run()
   DEFAULT true
 
   RET=
-  while	waitfor something_todo
+  while	waitfor something_todo k
   do
         do_run "$@" || RET=$?		# remember last fail code
         [ -n "$RET" ] || RET=0		# if there was a run, remember it's code
@@ -413,6 +413,8 @@ cmd_run()
 #  exit
 #}
 
+# needs a set k=key
+: do_run
 do_run()
 {
   # assumes something_todo has filled $k
@@ -454,7 +456,7 @@ do_run()
     #[ ".$t" = ".$s" ]
 
     case "$ret" in
-    (0)	o DBM done insert "$k" "$[v1]";;
+    (0)	o DBM 'done' insert "$k" "$[v1]";;
     # XXX TODO XXX not exactly sure what to do if it already exists
     # This can happen if you interrupt this script at this point
     # and then run "stale" afterwards
@@ -531,6 +533,27 @@ do_list()
   [ 0 -lt "$cnt" ]
 }
 
+#U redo val..:	add or redo values as single entry
+#U		fails if entry is on hold wait or oops
+: cmd_redo entry
+cmd_redo()
+{
+  locked 1
+  printf -vk ' %q' "$@"
+
+  v v DBM todo   get "$k" && EXISTS "$@"
+  v v DBM fail   get "$k" && retry "$k" "$v"
+  v v DBM 'done' get "$k" && redo  "$k" "$v"
+  v v DBM pids   get "$k" && rerun "$k" "$v"
+  v v DBM post   get "$k" && WAIT "$@"
+  v v DBM hold   get "$k" && HOLD "$@"
+  v v DBM oops   get "$k" && OOPS "$@"
+
+  o DBM todo insert "$k" 0
+  signal
+  OK added: "$@"
+}
+
 #U retry val..
 #U	retry given entry
 #U	see: list fail
@@ -544,7 +567,7 @@ cmd_retry()
 
   v v DBM fail   get "$k" && retry "$k" "$v"
   v v DBM 'done' get "$k" && redo  "$k" "$v"
-  v v DBM pids   get "$1" && rerun "$k" "$v"
+  v v DBM pids   get "$k" && rerun "$k" "$v"
 
   KO not found: "$@"
 }
