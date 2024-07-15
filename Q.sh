@@ -68,15 +68,18 @@ waitfor()
 {
   local waitbg
 
-  while	x "$@" && return
-        $NOWAIT && VERBOSE :Q55: nothing todo && RETVAL=55 && return 55
-        # global Qfifo already created in check()
-        read <"$Q/Qfifo" &
-        waitbg="$!"
-        ! x "$@"
+  while	[ -s "$Q/stop" ] ||
+	{
+	x "$@" && return
+	$NOWAIT && VERBOSE :Q55: nothing todo && RETVAL=55 && return 55
+	}
+	# global Qfifo already created in check()
+	read <"$Q/Qfifo" &
+	waitbg="$!"
+	! x "$@"
   do
-        VERBOSE waiting 'for' "$@"
-        wait $waitbg
+	VERBOSE waiting 'for' "$1"
+	wait $waitbg
   done
   # This again is a bit tricky here
   # As there might be a race between testcommand and FiFo
@@ -98,28 +101,28 @@ cmd_init()
 {
   if [ -d "$Q" ]
   then
-        check
-        result EXISTS "$Q"
-        return
+	check
+	result EXISTS "$Q"
+	return
   fi
 
   [ -e "$Q" ] && OOPS "$Q": already exists
   x mkdir "$Q" || OOPS "$Q": cannot create directory
   for a in "${DIRS[@]}"
   do
-        o mkdir "$Q/Q$a"
+	o mkdir "$Q/Q$a"
   done
   for a in "${FIFOS[@]}"
   do
-        o mknod "$Q/Q$a" p
+	o mknod "$Q/Q$a" p
   done
   for a in "${LOCKS[@]}"
   do
-        o touch "$Q/Q$a"
+	o touch "$Q/Q$a"
   done
   for a in "${DBMS[@]}"
   do
-        o DBM "$a" create
+	o DBM "$a" create
   done
   result OK created: "$Q"
 }
@@ -132,34 +135,34 @@ check()
   [ -d "$Q" ] || OOPS "$Q": not a directory
   for a in "${DIRS[@]}"
   do
-        [ -d "$Q/Q$a" ] || OOPS "$Q/Q$a": missing directory
+	[ -d "$Q/Q$a" ] || OOPS "$Q/Q$a": missing directory
   done
   for a in "${FIFOS[@]}"
   do
-        [ -p "$Q/Q$a" ] || OOPS "$Q/Q$a": missing FIFO
+	[ -p "$Q/Q$a" ] || OOPS "$Q/Q$a": missing FIFO
   done
   for a in "${LOCKS[@]}"
   do
-        [ -f "$Q/Q$a" ] || OOPS "$Q/Q$a": missing lockfile
-        if	[ -s "$Q/Q$a" ]
-        then
-                cat "$Q/Q$a"
-                VERBOSE :Q69: locked: "$a"
-                exit 69		# Yin-Yang
-        fi
+	[ -f "$Q/Q$a" ] || OOPS "$Q/Q$a": missing lockfile
+	if	[ -s "$Q/Q$a" ]
+	then
+		cat "$Q/Q$a"
+		VERBOSE :Q69: locked: "$a"
+		exit 69		# Yin-Yang
+	fi
   done
   for a in "${DBMS[@]}"
   do
-        [ -s "$Q/Q$a.dbm" ] && continue
-        [ main = "$a" ] && OOPS "$Q": not a Q directory: missing "$a.dbm"
-        [ 0 = $# ] || OOPS "$Q": missing "$a.dbm": try cmd init to upgrade
-        # Upgrade
-        o DBM "$a" create
+	[ -s "$Q/Q$a.dbm" ] && continue
+	[ main = "$a" ] && OOPS "$Q": not a Q directory: missing "$a.dbm"
+	[ 0 = $# ] || OOPS "$Q": missing "$a.dbm": try cmd init to upgrade
+	# Upgrade
+	o DBM "$a" create
   done
 
   SHIFT="${2:-$ARGS}"
   [ $ARGS -ge "${1:-0}" ] || OOPS missing arguments: need $[$1-$ARGS] more arguments
-  [ $ARGS -le "$SHIFT"  ] || OOPS too many arguments: not more than "$2" allowed
+  [ $ARGS -ge "$SHIFT"  ] || OOPS too few arguments: need at least "$2" arguments
   COUNT=0
 }
 
@@ -204,10 +207,10 @@ livepid()
   kill -0 "$1" 2>/dev/null && VERBOSE running PID: "$1" && return		# this check can create false positives
   [ -f "$LOCK" ] || VERBOSE missing PID lock: "$1" || return	# this can happen if PID is reused
   {
-        flock -nx 8 || VERBOSE locked PID: "$1" || return 0	# still running
-        # stale lock
-        VERBOSE stale PID lock: "$1"
-        o rm -f "$LOCK"
+	flock -nx 8 || VERBOSE locked PID: "$1" || return 0	# still running
+	# stale lock
+	VERBOSE stale PID lock: "$1"
+	o rm -f "$LOCK"
   } 8<"$LOCK"
   return 1	# PID not live
 }
@@ -258,11 +261,11 @@ cmd_get()
   check 1
   for a
   do
-        printf -vk 'k%q' "$a"
-        v v DBM data get "$k" || continue
-        echo "$v"
-        OK found: "$a"
-        count || break
+	printf -vk 'k%q' "$a"
+	v v DBM data get "$k" || continue
+	echo "$v"
+	OK found: "$a"
+	count || break
   done
   KO none found: "$@"
 }
@@ -306,12 +309,12 @@ numeric()
   local a
   for a in "${@:2}"
   do
-        case "$a" in
-        (*[^0-9]*)	OOPS not numeric: "$a";;
-        (0)		;;
-        ([1-9]*)	;;
-        (*)		OOPS numerics must not start with 0: "$a";;
-        esac
+	case "$a" in
+	(*[^0-9]*)	OOPS not numeric: "$a";;
+	(0)		;;
+	([1-9]*)	;;
+	(*)		OOPS numerics must not start with 0: "$a";;
+	esac
   done
 }
 
@@ -322,7 +325,7 @@ not0()
 
   for a
   do
-        [ 0 = "$a" ] && OOPS cannot be 0: "$a"
+	[ 0 = "$a" ] && OOPS cannot be 0: "$a"
   done
   numeric "$@"
 }
@@ -333,7 +336,7 @@ isvalid()
   local a
   for a in "${@:2}"
   do
-        [ ".$a" = ".$1" ] && return
+	[ ".$a" = ".$1" ] && return
   done
   return 1
 }
@@ -393,9 +396,9 @@ cmd_run()
   RET=
   while	waitfor something_todo k
   do
-        do_run "$@" || RET=$?		# remember last fail code
-        [ -n "$RET" ] || RET=0		# if there was a run, remember it's code
-        count || break
+	do_run "$@" || RET=$?		# remember last fail code
+	[ -n "$RET" ] || RET=0		# if there was a run, remember it's code
+	count || break
   done
 
   exit ${RET:-$RETVAL}			# if nothing done, return RETVAL
@@ -422,9 +425,9 @@ do_run()
   v v DBM todo get "$k" || unlock || return
   if	v p DBM pids get "$k"
   then
-          livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
-          VERBOSE stale PID $p
-          o DBM pids delete "$k" "$p"	# stale old (interrupted) entry (normal case)
+	livepid "${p%% *}" && OOPS stale TODO found 'for' life PID $p	# should not happen, we are locked!  o DBM todo delete "$k" "$v" && continue
+	VERBOSE stale PID $p
+	o DBM pids delete "$k" "$p"	# stale old (interrupted) entry (normal case)
   fi
 
   LOCK="$Q/Qpids/$$.pid"
@@ -489,32 +492,32 @@ cmd_list()
   for a
   do
 #U	returns Q2 if nothing listed, else:
-        case "$a" in
+	case "$a" in
 #U	all	list all known states
-        (all)	cmd_list "${ALL[@]}";;
+	(all)	cmd_list "${ALL[@]}";;
 #U	undone	list 
-        (undone)	cmd_list "${TODO[@]}" "${OTHER[@]}";;
+	(undone)	cmd_list "${TODO[@]}" "${OTHER[@]}";;
 #U	done	Q0 successful
-        (done)	do_list done && result OK	$cnt successful;;
+	(done)	do_list done && result OK	$cnt successful;;
 #U	pids	Q4 running
-        (pids)	do_list pids && result RUNNING	$cnt running;;
+	(pids)	do_list pids && result RUNNING	$cnt running;;
 #U	todo	Q3 queued
-        (todo)	do_list todo && result EXISTS	$cnt queued;;
+	(todo)	do_list todo && result EXISTS	$cnt queued;;
 #U	fail	Q1 failed
-        (fail)	do_list fail && result KO	$cnt failed;;
+	(fail)	do_list fail && result KO	$cnt failed;;
 #U	wait	Q5 waiting
-        (wait)	do_list post && result WAIT	$cnt waiting;;
+	(wait)	do_list post && result WAIT	$cnt waiting;;
 #U	hold	Q6 on-hold
-        (hold)	do_list hold && result HOLD	$cnt on-hold;;
+	(hold)	do_list hold && result HOLD	$cnt on-hold;;
 #U	oops	Q23 oopsed
-        (oops)	do_list oops && result OOPS	$cnt oopsed;;
+	(oops)	do_list oops && result OOPS	$cnt oopsed;;
 #U	main	(has no return value)
-        (main)	do_list main;;
+	(main)	do_list main;;
 #U	data	(has no return value)
-        (data)	do_list data;;
-        (*)	OOPS can only list: "${ALL[@]}";;
-        esac
-        count 0 || break
+	(data)	do_list data;;
+	(*)	OOPS can only list: "${ALL[@]}";;
+	esac
+	count 0 || break
   done
   exit $RETVAL
 }
@@ -526,9 +529,9 @@ do_list()
   cnt=0
   while	IFS=$'\t' read -ru6 k v
   do
-        let ++cnt
-        printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
-        count || break
+	let ++cnt
+	printf '%s\t%s\t%s\n'  "$1" "$v" "$k"
+	count || break
   done 6< <(feed "$1")
   [ 0 -lt "$cnt" ]
 }
@@ -572,13 +575,23 @@ cmd_retry()
   KO not found: "$@"
 }
 
+: retrycmp k v
+insert()
+{
+  local c
+
+  x DBM todo insert "$k" "$r" && return
+  o v c DBM todo get "$k"
+  o test ".$c" = ".$r"
+}
+
 : retry k v
 retry()
 {
-  local k="$1" v="$2" r="${2#* }"
+  local k="$1" v="$2" r="${2#* }" c
   eval "set -- $k"
 
-  o DBM todo insert "$k" "$r"
+  insert "$k" "$r"
   o DBM fail delete "$k" "$v"
   signal
   OK retry "$r:" "$@"
@@ -625,9 +638,9 @@ cmd_stale()
   stale=0
   while	IFS=$'\t' read -ru6 k v
   do
-        let ++cnt
-        ( rerun "$k" "$v" ) && RETVAL=2 && let ++stale
-        count || break
+	let ++cnt
+	( rerun "$k" "$v" ) && RETVAL=2 && let ++stale
+	count || break
   done 6< <(feed pids)
   signal
   VERBOSE ":Q$RETVAL:" running=$cnt requeued=$stale
@@ -648,15 +661,15 @@ cmd_failed()
   redo=0
   while	IFS=$'\t' read -ru6 k v
   do
-        let ++cnt
-        r="${v##* }"
-        cmpval "$1" "${v%% *}" || continue
-        cmpval "$2" "${v##* }" || continue
-        ( retry "$k" "$v" )
-        RETVAL=2
-        let ++redo
-        count || break
-  done 6< <(feed fail)
+	let ++cnt
+	r="${v##* }"
+	cmpval "$1" "${v%% *}" || continue
+	cmpval "$2" "${v##* }" || continue
+	( retry "$k" "$v" )
+	RETVAL=2
+	let ++redo
+	count || break
+  done 6< <(feed fail | tac)   # unfortunately we need to buffer here
   [ 0 = $redo ] || signal
   VERBOSE ":Q$RETVAL:" fail=$cnt retry=$redo
 }
@@ -670,6 +683,42 @@ cmpval()
   return 1
 }
 
+#U stop cause  stop "run" until "start cause"
+: cmd_stop
+cmd_stop()
+{
+  local s
+
+  locked 1
+  printf -vs ' %q' "$@"
+  fgrep -qx "$s" "$Q/Qstop" && EXISTS stop: "$*"
+  echo "$s" >> "$Q/Qstop"
+  OK stop: "$*"
+}
+
+#U start cause start "run" again
+: cmd_start
+cmd_start()
+{
+  local s
+
+  if   [ 0 = $# ]
+  then
+	[ -s "$Q/Qstop" ] || OK not stopped
+	o read s < "$Q/Qstop"
+	KO stopped "$s"
+  fi
+  locked 1
+  printf -vs ' %q' "$@"
+  fgrep -qx "$s" "$Q/Qstop" || KO not stopped: "$*"
+  o rm -f "$Q/Qstop.tmp"
+  { fgrep -vx "$s" "$Q/Qstop" || test 1 = $?; } > "$Q/Qstop.tmp" || OOPS start: failed to create "$Q/Qstop.tmp"
+  o ln -f "$Q/Qstop.tmp" "$Q/Qstop"
+  o rm -f "$Q/Qstop.tmp"
+  OK start "$*"
+  :
+}
+
 : main
 main()
 {
@@ -678,16 +727,16 @@ main()
   v Q readlink -f "$1" || OOPS "$1": invalid or missing path
   shift
   while	CMD="$1"
-        shift
+	shift
   do
-        case "$CMD" in
-        (*[^a-z]*)	OOPS illegal command: "$CMD";;
-        esac
-        declare -F "cmd_$CMD" >/dev/null || OOPS unknown command: "$CMD"
-        SHIFT=0
-        ARGS=$#
-        "cmd_$CMD" "$@"
-        [ 0 = $SHIFT ] || shift "$SHIFT" || INTERNAL $SHIFT
+	case "$CMD" in
+	(*[^a-z]*)	OOPS illegal command: "$CMD";;
+	esac
+	declare -F "cmd_$CMD" >/dev/null || OOPS unknown command: "$CMD"
+	SHIFT=0
+	ARGS=$#
+	"cmd_$CMD" "$@"
+	[ 0 = $SHIFT ] || shift "$SHIFT" || INTERNAL $SHIFT
   done
 
   [ -n "$RETVAL" ] || OOPS missing command: try: "$0" . help
