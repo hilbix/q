@@ -693,6 +693,7 @@ cmd_stop()
   printf -vs ' %q' "$@"
   fgrep -qx "$s" "$Q/Qstop" && EXISTS stop: "$*"
   echo "$s" >> "$Q/Qstop"
+  signal
   OK stop: "$*"
 }
 
@@ -715,8 +716,8 @@ cmd_start()
   { fgrep -vx "$s" "$Q/Qstop" || test 1 = $?; } > "$Q/Qstop.tmp" || OOPS start: failed to create "$Q/Qstop.tmp"
   o ln -f "$Q/Qstop.tmp" "$Q/Qstop"
   o rm -f "$Q/Qstop.tmp"
+  signal
   OK start "$*"
-  :
 }
 
 : main
