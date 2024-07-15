@@ -683,7 +683,7 @@ cmpval()
   return 1
 }
 
-#U stop cause  stop "run" until "start cause"
+#U stop cause:	stop "run" until "start cause"
 : cmd_stop
 cmd_stop()
 {
@@ -696,7 +696,7 @@ cmd_stop()
   OK stop: "$*"
 }
 
-#U start cause start "run" again
+#U start cause:	start "run" again
 : cmd_start
 cmd_start()
 {
