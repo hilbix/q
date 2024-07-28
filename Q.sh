@@ -68,7 +68,7 @@ waitfor()
 {
   local waitbg
 
-  while	[ -s "$Q/stop" ] ||
+  while	[ -s "$Q/Qstop" ] ||
 	{
 	x "$@" && return
 	$NOWAIT && VERBOSE :Q55: nothing todo && RETVAL=55 && return 55
@@ -76,7 +76,7 @@ waitfor()
 	# global Qfifo already created in check()
 	read <"$Q/Qfifo" &
 	waitbg="$!"
-	! x "$@"
+	[ -s "$Q/Qstop" ] || ! x "$@"
   do
 	VERBOSE waiting 'for' "$1"
 	wait $waitbg
@@ -240,6 +240,10 @@ cmd_all()	{ LIMIT=0; }
 #U limit N:	limit number of entries to process max
 cmd_limit()	{ check 1 1; numeric "$1"; LIMIT="$1"; }
 DEFAULT()	{ [ -n "$VERBOSE" ] || case "$1" in (1|true|:|x) VERBOSE=:;; (0|false|-) VERBOSE=false;; (*) INTERNAL "$@";; esac; }
+#U ok:	fail out of not ok
+cmd_ok()	{ OKRUN=:; }
+#U ko:	ignore fails (default)
+cmd_ko()	{ OKRUN=; }
 
 #U set k v..:	set key to values
 : cmd_set
@@ -398,6 +402,7 @@ cmd_run()
   do
 	do_run "$@" || RET=$?		# remember last fail code
 	[ -n "$RET" ] || RET=0		# if there was a run, remember it's code
+	[ -z "$OKRUN" ] || [ 0 = "$RET" ] || break
 	count || break
   done
 
@@ -766,6 +771,7 @@ VERBOSE=	# default: unspec
 DEBUG=false
 NOWAIT=false
 LIMIT=0
+OKRUN=
 main "$@"
 
 # Databases:
